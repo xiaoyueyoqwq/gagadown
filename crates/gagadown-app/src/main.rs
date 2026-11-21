@@ -428,11 +428,6 @@ struct App {
     main_pos: Option<Pos2>,
     main_maximized: Option<bool>,
     update: update::State,
-    /// 关于卡片更新标签的交叉淡入淡出：当前文案、上一条文案、切换时刻、阶段 key。
-    update_label: String,
-    update_label_prev: String,
-    update_label_at: Instant,
-    update_label_key: u8,
 }
 
 /// A download popup: `task` is set once the hand-off probe accepted the link.
@@ -2207,10 +2202,6 @@ impl App {
             draft,
             draft_proxies,
             update: update::new_state(),
-            update_label: String::new(),
-            update_label_prev: String::new(),
-            update_label_at: Instant::now(),
-            update_label_key: u8::MAX,
             cache: None,
             toasts: Vec::new(),
             handoff_fails: Vec::new(),
@@ -2848,6 +2839,7 @@ impl App {
 
     /// 更新器入口，按 update::Stage 推进：未在跑 → 检查；Found → 自装（不支持
     /// 的环境打开发布页）；Installed → 重启进新版。
+    #[allow(dead_code)] // 更新 UI 入口待重新设计，机制保留
     fn start_update(&mut self) {
         let stage = self.update.lock().clone();
         match stage {
@@ -3571,54 +3563,10 @@ impl App {
             }
             lx = lr.right() + 18.0;
         }
-        // 右侧统计先画，拿到左边界给更新标签做宽度上限——长译文（如英文
-        // Installed 状态）不再与统计文本重叠，超出部分截断为省略号。
+        // 右侧统计右对齐单独绘制。
         let done = self.views.iter().filter(|v| v.status == Status::Completed);
         let (n, total) = done.fold((0usize, 0u64), |(n, t), v| (n + 1, t + v.size.unwrap_or(0)));
-        let stats_r = pt.text(pos2(r.right() - 20.0, y), Align2::RIGHT_CENTER, trf("已完成 {} 个下载，共 {}", &[&n, &bytes(total)]), font(12.0), p.weak);
-        let umax = (stats_r.left() - lx - 12.0).max(8.0);
-        // 更新入口：单个标签即状态机——文案/颜色/可交互性随 stage 变化，
-        // 文案切换时 90ms 提亮落位，不再向后堆叠状态文本。
-        let stage = self.update.lock().clone();
-        let (ukey, ulabel, ucol, live, utip): (u8, String, Color32, bool, Option<String>) = match &stage {
-            update::Stage::Idle => (0, tr("检查更新").into(), p.accent, true, None),
-            update::Stage::Checking => (1, tr("正在检查…").into(), p.weak, false, None),
-            update::Stage::UpToDate => (2, tr("已是最新").into(), p.weak, true, None),
-            update::Stage::Found(tag, _) => (3, trf("发现新版本 {}", &[tag]), p.accent, true, None),
-            update::Stage::Downloading(pct) => (4, trf("正在下载… {}%", &[pct]), p.weak, false, None),
-            update::Stage::Installing => (5, tr("正在安装…").into(), p.weak, false, None),
-            update::Stage::Installed => (6, tr("已安装，点击重启完成更新").into(), p.accent, true, None),
-            update::Stage::Failed(e) => (7, tr("更新失败").into(), p.red, true, Some(e.clone())),
-        };
-        const UFADE: Duration = Duration::from_millis(90);
-        // 直接换字、新文案从微暗状态提亮落位：画面不会变暗（不闪），
-        // 也没有双字重叠（不糊）。只在阶段变化时触发；阶段内文案变化
-        // （如下载百分比）即时刷新，否则每个百分点都会重启动画。
-        if ukey != self.update_label_key {
-            self.update_label_prev = std::mem::replace(&mut self.update_label, ulabel.clone());
-            self.update_label_at = Instant::now();
-            self.update_label_key = ukey;
-        }
-        let ft = self.update_label_at.elapsed().as_secs_f32() / UFADE.as_secs_f32();
-        if ft < 1.0 {
-            ui.ctx().request_repaint();
-        }
-        let ualpha = if ft >= 1.0 { 1.0 } else { 1.0 - 0.35 * (1.0 - ft) * (1.0 - ft) };
-        let lr = text_line(&pt, pos2(lx, y), Align2::LEFT_CENTER, &ulabel, font(12.5), ucol.linear_multiply(ualpha), umax);
-        if live {
-            let mut resp = ui.interact(lr.expand(3.0), Id::new("about_update"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            if let Some(t) = &utip {
-                resp = resp.on_hover_text(t);
-            } else if lr.width() >= umax - 1.0 {
-                resp = resp.on_hover_text(&ulabel);
-            }
-            if resp.hovered() {
-                pt.hline(lr.x_range(), lr.bottom() + 1.0, Stroke::new(1.0, p.accent.gamma_multiply(0.6)));
-            }
-            if resp.clicked() {
-                self.start_update();
-            }
-        }
+        pt.text(pos2(r.right() - 20.0, y), Align2::RIGHT_CENTER, trf("已完成 {} 个下载，共 {}", &[&n, &bytes(total)]), font(12.0), p.weak);
     }
 
     fn settings_page(&mut self, ui: &mut Ui, p: &Pal) {
