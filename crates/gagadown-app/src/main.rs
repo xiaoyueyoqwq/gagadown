@@ -2520,46 +2520,46 @@ impl App {
             ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
         }
 
-        if !self.welcome_visible() {
-            // 更新提示药丸：金刚键左侧。无更新时完全不渲染；发现新版与待重启
-            // 用 accent 实心药丸（可点），检查中/下载/安装为弱色文本态，
-            // 失败为红色可点重试。
-            let stage = self.update.lock().clone();
-            let ulabel: Option<String> = match &stage {
-                update::Stage::Idle | update::Stage::UpToDate => None,
-                update::Stage::Checking => Some(tr("正在检查…").into()),
-                update::Stage::Found(tag, _) => Some(trf("发现新版本 {}", &[tag])),
-                update::Stage::Downloading(pct) => Some(trf("正在下载… {}%", &[pct])),
-                update::Stage::Installing => Some(tr("正在安装…").into()),
-                update::Stage::Installed => Some(tr("重启完成更新").into()),
-                update::Stage::Failed(_) => Some(tr("更新失败").into()),
+        // 更新提示药丸：金刚键左侧。无更新时完全不渲染；发现新版与待重启
+        // 用 accent 实心药丸（可点），检查中/下载/安装为弱色文本态，
+        // 失败为红色可点重试。
+        let stage = self.update.lock().clone();
+        let ulabel: Option<String> = match &stage {
+            update::Stage::Idle | update::Stage::UpToDate => None,
+            update::Stage::Checking => Some(tr("正在检查…").into()),
+            update::Stage::Found(tag, _) => Some(trf("发现新版本 {}", &[tag])),
+            update::Stage::Downloading(pct) => Some(trf("正在下载… {}%", &[pct])),
+            update::Stage::Installing => Some(tr("正在安装…").into()),
+            update::Stage::Installed => Some(tr("重启完成更新").into()),
+            update::Stage::Failed(_) => Some(tr("更新失败").into()),
+        };
+        let mut pill_right = minr.left() - 8.0;
+        if let Some(ulabel) = ulabel {
+            let f = font(11.5);
+            let actionable = matches!(stage, update::Stage::Found(..) | update::Stage::Installed | update::Stage::Failed(_));
+            let tw = ui.painter().layout_no_wrap(ulabel.clone(), f.clone(), p.text).size().x;
+            let pill = Rect::from_min_size(pos2(pill_right - tw - 20.0, r.center().y - 10.0), vec2(tw + 20.0, 20.0));
+            let mut resp = ui.interact(pill, Id::new("update_pill"), Sense::click());
+            let (bg, fg) = if matches!(stage, update::Stage::Found(..) | update::Stage::Installed) {
+                (p.accent, Color32::WHITE)
+            } else if matches!(stage, update::Stage::Failed(_)) {
+                (p.input, p.red)
+            } else {
+                (p.input, p.weak)
             };
-            let mut pill_right = minr.left() - 8.0;
-            if let Some(ulabel) = ulabel {
-                let f = font(11.5);
-                let actionable = matches!(stage, update::Stage::Found(..) | update::Stage::Installed | update::Stage::Failed(_));
-                let tw = ui.painter().layout_no_wrap(ulabel.clone(), f.clone(), p.text).size().x;
-                let pill = Rect::from_min_size(pos2(pill_right - tw - 20.0, r.center().y - 10.0), vec2(tw + 20.0, 20.0));
-                let mut resp = ui.interact(pill, Id::new("update_pill"), Sense::click());
-                let (bg, fg) = if matches!(stage, update::Stage::Found(..) | update::Stage::Installed) {
-                    (p.accent, Color32::WHITE)
-                } else if matches!(stage, update::Stage::Failed(_)) {
-                    (p.input, p.red)
-                } else {
-                    (p.input, p.weak)
-                };
-                let bg = if resp.hovered() && actionable { bg.gamma_multiply(1.2) } else { bg };
-                ui.painter().rect(pill, CornerRadius::same(10), bg, Stroke::NONE, StrokeKind::Inside);
-                ui.painter().text(pill.center(), Align2::CENTER_CENTER, &ulabel, f, fg);
-                if actionable {
-                    resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                }
-                if resp.clicked() {
-                    self.start_update();
-                }
-                pill_right = pill.left() - 8.0;
+            let bg = if resp.hovered() && actionable { bg.gamma_multiply(1.2) } else { bg };
+            ui.painter().rect(pill, CornerRadius::same(10), bg, Stroke::NONE, StrokeKind::Inside);
+            ui.painter().text(pill.center(), Align2::CENTER_CENTER, &ulabel, f, fg);
+            if actionable {
+                resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             }
+            if resp.clicked() {
+                self.start_update();
+            }
+            pill_right = pill.left() - 8.0;
+        }
 
+        if !self.welcome_visible() {
             // URL 输入框让位给药丸：右侧边界不越过 pill_right。
             let w = (r.width() * 0.42).clamp(280.0, 620.0).min(((pill_right - r.center().x) * 2.0).max(160.0));
             let cb = Rect::from_center_size(r.center(), vec2(w, 24.0));
