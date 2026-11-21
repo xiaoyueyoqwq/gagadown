@@ -2176,7 +2176,7 @@ impl App {
     fn new(rt: tokio::runtime::Runtime, engine: Engine, api_error: Arc<Mutex<Option<String>>>, icon: Arc<egui::IconData>, accent: Color32) -> Self {
         let draft = engine.settings();
         let draft_proxies = draft.proxy.proxies.join("\n");
-        Self {
+        let app = Self {
             rt,
             engine,
             page: Page::Downloads,
@@ -2223,7 +2223,11 @@ impl App {
             main_size: None,
             main_pos: None,
             main_maximized: None,
-        }
+        };
+        // 启动时静默检查一次更新：发现新版才在标题栏出现提示，无更新不打扰。
+        let st = app.update.clone();
+        app.rt.spawn(async move { update::check(&st).await });
+        app
     }
 
     fn install_extension(&mut self, ctx: &egui::Context, i: usize) {
@@ -2517,7 +2521,47 @@ impl App {
         }
 
         if !self.welcome_visible() {
-            let w = (r.width() * 0.42).clamp(280.0, 620.0);
+            // 更新提示药丸：金刚键左侧。无更新时完全不渲染；发现新版与待重启
+            // 用 accent 实心药丸（可点），检查中/下载/安装为弱色文本态，
+            // 失败为红色可点重试。
+            let stage = self.update.lock().clone();
+            let ulabel: Option<String> = match &stage {
+                update::Stage::Idle | update::Stage::UpToDate => None,
+                update::Stage::Checking => Some(tr("正在检查…").into()),
+                update::Stage::Found(tag, _) => Some(trf("发现新版本 {}", &[tag])),
+                update::Stage::Downloading(pct) => Some(trf("正在下载… {}%", &[pct])),
+                update::Stage::Installing => Some(tr("正在安装…").into()),
+                update::Stage::Installed => Some(tr("重启完成更新").into()),
+                update::Stage::Failed(_) => Some(tr("更新失败").into()),
+            };
+            let mut pill_right = minr.left() - 8.0;
+            if let Some(ulabel) = ulabel {
+                let f = font(11.5);
+                let actionable = matches!(stage, update::Stage::Found(..) | update::Stage::Installed | update::Stage::Failed(_));
+                let tw = ui.painter().layout_no_wrap(ulabel.clone(), f.clone(), p.text).size().x;
+                let pill = Rect::from_min_size(pos2(pill_right - tw - 20.0, r.center().y - 10.0), vec2(tw + 20.0, 20.0));
+                let mut resp = ui.interact(pill, Id::new("update_pill"), Sense::click());
+                let (bg, fg) = if matches!(stage, update::Stage::Found(..) | update::Stage::Installed) {
+                    (p.accent, Color32::WHITE)
+                } else if matches!(stage, update::Stage::Failed(_)) {
+                    (p.input, p.red)
+                } else {
+                    (p.input, p.weak)
+                };
+                let bg = if resp.hovered() && actionable { bg.gamma_multiply(1.2) } else { bg };
+                ui.painter().rect(pill, CornerRadius::same(10), bg, Stroke::NONE, StrokeKind::Inside);
+                ui.painter().text(pill.center(), Align2::CENTER_CENTER, &ulabel, f, fg);
+                if actionable {
+                    resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
+                if resp.clicked() {
+                    self.start_update();
+                }
+                pill_right = pill.left() - 8.0;
+            }
+
+            // URL 输入框让位给药丸：右侧边界不越过 pill_right。
+            let w = (r.width() * 0.42).clamp(280.0, 620.0).min(((pill_right - r.center().x) * 2.0).max(160.0));
             let cb = Rect::from_center_size(r.center(), vec2(w, 24.0));
             let id = Id::new("url");
             let focus = ctx.memory(|m| m.has_focus(id));
@@ -2839,7 +2883,6 @@ impl App {
 
     /// 更新器入口，按 update::Stage 推进：未在跑 → 检查；Found → 自装（不支持
     /// 的环境打开发布页）；Installed → 重启进新版。
-    #[allow(dead_code)] // 更新 UI 入口待重新设计，机制保留
     fn start_update(&mut self) {
         let stage = self.update.lock().clone();
         match stage {
@@ -4261,7 +4304,9 @@ impl eframe::App for App {
         }
         #[cfg(not(target_os = "linux"))]
         self.ui_main(ui);
-        let busy = self.views.iter().any(|v| matches!(v.status, Status::Running | Status::Queued)) || self.engine.is_detecting();
+        let busy = self.views.iter().any(|v| matches!(v.status, Status::Running | Status::Queued))
+            || self.engine.is_detecting()
+            || matches!(*self.update.lock(), update::Stage::Checking | update::Stage::Downloading(_) | update::Stage::Installing);
         ctx.request_repaint_after(Duration::from_millis(if busy { 250 } else { 1000 }));
     }
 
